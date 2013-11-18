@@ -1,0 +1,35 @@
+#!/bin/sh -e
+# This script prepares a cms.weeklyN repository which can then be updated with
+# IBs. This is done by uploading (but not syncying back) a build of a special
+# dummy package using the cfg at the beginning of the build.
+syntax(){
+  echo "syntax: cms-prepare-weekly-builds <path> <architecture>"
+}
+export CVSROOT=:pserver:anonymous@cmssw.cvs.cern.ch:2401/local/reps/CMSSW
+if [ ! "X$#" == X2 ]; then
+  syntax
+fi
+WORKDIR=$1
+ARCH=$2
+case $ARCH in 
+  slc*|osx*) ;;
+  *) echo "Invalid arch $ARCH" ; exit 1;;
+esac
+export SCRAM_ARCH=$ARCH
+# We do not care about dependencies
+mkdir -p $WORKDIR
+cd $WORKDIR
+cvs -Q co -r HEAD CMSDIST
+cvs -Q co -r V00-21-04 PKGTOOLS
+cat << \EOF >CMSDIST/dummy.spec
+### RPM cms dummy @DATE@
+## NOCOMPILER
+Source: none
+%prep
+%build
+%install
+EOF
+perl -p -i -e "s|[@]DATE[@]|`date +%Y%m%d`|g" CMSDIST/dummy.spec
+PKGTOOLS/cmsBuild --arch $ARCH --work-dir b -j 10 build dummy
+# Build but do not sync back, so that we have a disposable "cms.weekly" repository.
+PKGTOOLS/cmsBuild --arch $ARCH --work-dir b -j 10 --upload-tmp-repository weekly upload dummy 

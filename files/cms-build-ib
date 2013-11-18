@@ -1,0 +1,99 @@
+#!/usr/bin/python
+# This script builds and upload the last requested ib in the tag collector.
+# If successful, the results are uploaded to the cms.weekly repository,
+# so that it can be installed also by other machines.
+# Notice such a repository will be rebuilt every once in a while.
+from optparse import OptionParser
+from urllib2 import urlopen
+from xml.sax.handler import ContentHandler
+import xml, re, sys
+from os import chdir,environ,readlink,getpid
+from os.path import join
+from commands import getstatusoutput
+import atexit
+from logging import debug, critical
+
+TC_SERVER="https://cmstags.cern.ch"
+
+def format(s, **kwds):
+  return s % kwds
+
+def doOrDie(s):
+  debug(s)
+  error, result = getstatusoutput(s)
+  if error:
+    critical(result)
+    exit(1)
+  debug(result)
+  return result
+
+# Parse the xml returned by ReleaseExternals. We should probably add JSON output to TC.
+class ExternalsTagsHandler(ContentHandler):
+  def __init__(self):
+    self.tags = {}
+  def startElement(self, name, attrs):
+    if name != "external":
+      return
+    # Minimal sanitization of tags
+    self.tags[attrs["external"]] = re.sub("[^_a-zA-Z0-9-]", "",  attrs["tag"])
+
+def removeLock():
+  getstatusoutput("rm -rf %s/lock*" % workdir)
+
+if __name__ == "__main__":
+  environ["CVSROOT"] = ":pserver:anonymous@cmssw.cvs.cern.ch:/local/reps/CMSSW"
+  parser = OptionParser(usage="syntax: cms-build-ib <path> <architecture> <queue>")
+  opt, args = parser.parse_args()  
+  if len(args) != 3:
+    parser.error("Not enough arguments")
+  workdir, arch, release = args
+  if not arch.startswith("osx") and not arch.startswith("slc"):
+    parser.error("%s in not a correct architecture." % arch)
+
+  # Decide if we can build: 
+  # - Get the lock and check if the pid is still there. If yes, exit. If not continue.
+  # - Kill any transaction currently going on, if we manage, then exit.
+  # - Create a transaction lock.
+  # - Link the lock into place.
+  #
+  # If anything tries to do the same the final link will either succeed (meaning
+  try:
+    lockLink = readlink(join(workdir, "lock"))
+    lockProcess = int(lockLink.rsplit(".", 1)[1])
+    os.kill(currentProcess, 0)
+    print "Process already running"
+    exit(0)
+  except:
+    debug("No other process running. Starting transaction.")
+    pass
+  cmd = format("set -e;"
+               "rm -rf %(workdir)s/lock.*;"
+               "mkdir %(workdir)s/lock.%(pid)s;"
+               "ln -s %(workdir)s/lock.%(pid)s %(workdir)s/lock.%(pid)s.next;"
+               "mv %(workdir)s/lock.%(pid)s.next %(workdir)s/lock",
+               workdir=workdir,
+               pid=getpid())
+  error, result = getstatusoutput(cmd)
+  if error:
+    print "Unable to get transaction, exiting"
+    print result
+    exit(0)
+  lockLink = readlink(join(workdir, "lock"))
+  lockProcess = int(lockLink.rsplit(".", 1)[1])
+  print lockProcess
+  if lockProcess != getpid():
+    print "Tansaction failed."
+    exit(1)
+  atexit.register(removeLock)
+  
+  data = urlopen(format("%(server)s/tc/ReleaseExternalsXML?release=%(release)s&architecture=%(arch)s",
+                 server=TC_SERVER,
+                 release=release,
+                 arch=arch))
+  ph = ExternalsTagsHandler()
+  xml.sax.parseString(data.read(), ph)
+  chdir(workdir)
+  doOrDie("pwd ; cvs co -r %(CMSDIST)s CMSDIST" % ph.tags)
+  doOrDie("pwd ; cvs co -r %(PKGTOOLS)s PKGTOOLS" % ph.tags)
+  doOrDie(format("pwd ; ls ; PKGTOOLS/cmsBuild --arch %(arch)s --work-dir b -j 10 --repository cms.weekly build cmssw-tool-conf", arch=arch))
+  doOrDie(format("pwd ; ls ; PKGTOOLS/cmsBuild --arch %(arch)s --work-dir b -j 10 --repository cms.weekly upload cmssw-tool-conf", arch=arch))

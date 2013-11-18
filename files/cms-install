@@ -1,0 +1,4 @@
+#!/bin/sh
+source $1
+apt-get update
+apt-get install -y $2
