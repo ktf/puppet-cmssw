@@ -46,15 +46,13 @@ A great module has a working travis build
 ## Usage
 
 ```puppet
-boxen::example { 'best example ever':
-  salutation => 'fam'
+package { 'cms+cmssw+CMSSW_7_0_0_pre3':
+  ensure => 'present'
 }
 ```
 
 ## Required Puppet Modules
 
-* `boxen`
-* `anything-else`
 
 ## Development
 
